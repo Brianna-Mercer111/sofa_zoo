@@ -5,7 +5,11 @@ from stable_baselines3 import PPO
 from sofa_env.scenes.grasp_lift_touch.grasp_lift_touch_env import CollisionEffect, GraspLiftTouchEnv, Phase, RenderMode, ObservationType, ActionType
 
 from sofa_zoo.common.sb3_setup import configure_learning_pipeline
+from stable_baselines3.common.callbacks import CallbackList
 from sofa_zoo.common.lapgym_experiment_parameters import CONFIG, PPO_KWARGS
+import wandb
+from wandb.integration.sb3 import WandbCallback
+from enum import Enum
 
 
 if __name__ == "__main__":
@@ -138,6 +142,48 @@ if __name__ == "__main__":
     config["env_kwargs"] = env_kwargs
     config["info_keywords"] = info_keywords
 
+    def make_wandb_safe(config_dict):
+        """Convert config dict to wandb-safe format, handling enum keys and values."""
+        safe_dict = {}
+        for key, value in config_dict.items():
+            # Convert key if it's an enum
+            safe_key = key.name if isinstance(key, Enum) else key
+            
+            # Convert value based on type
+            if isinstance(value, Enum):
+                safe_dict[safe_key] = value.name
+            elif isinstance(value, dict):
+                safe_dict[safe_key] = make_wandb_safe(value)  # Recursive
+            elif isinstance(value, (list, tuple)):
+                safe_dict[safe_key] = [
+                    v.name if isinstance(v, Enum) else 
+                    make_wandb_safe(v) if isinstance(v, dict) else v 
+                    for v in value
+                ]
+            elif isinstance(value, (str, int, float, bool, type(None))):
+                safe_dict[safe_key] = value
+            else:
+                safe_dict[safe_key] = str(value)
+        
+        return safe_dict
+
+    wandb.init(
+        project="grasp-lift-touch",
+        config={
+            "observation_type": observation_type.name,
+            "continuous_actions": continuous_actions,
+            "start_phase": start_phase.name,
+            "end_phase": end_phase.name,
+            "total_timesteps": config["total_timesteps"],
+            **make_wandb_safe(config),
+            **make_wandb_safe(ppo_kwargs),
+            **make_wandb_safe(env_kwargs),
+        },
+        sync_tensorboard=True,
+        monitor_gym=True,
+        name=f"PPO_{observation_type.name}_cont={continuous_actions}",
+    )
+
     model, callback = configure_learning_pipeline(
         env_class=GraspLiftTouchEnv,
         env_kwargs=env_kwargs,
@@ -146,16 +192,27 @@ if __name__ == "__main__":
         normalize_observations=False if image_based else True,
         algo_class=PPO,
         algo_kwargs=ppo_kwargs,
-        render=add_render_callback,
+        render=False,
         normalize_reward=normalize_reward,
         reward_clip=reward_clip,
     )
 
+    #        render=add_render_callback
+
+    wandb_callback = WandbCallback(
+        model_save_path=f"models/{wandb.run.id}",
+        model_save_freq=10000,
+        verbose=2,
+    )
+
+    combined_callback = CallbackList([callback, wandb_callback])
+
     model.learn(
         total_timesteps=config["total_timesteps"],
-        callback=callback,
+        callback=combined_callback,
         tb_log_name=f"PPO_{observation_type.name}_{continuous_actions=}_start={start_phase.name}_end={end_phase.name}",
     )
 
     log_path = str(model.logger.dir)
     model.save(log_path + "saved_model.pth")
+    wandb.finish()
