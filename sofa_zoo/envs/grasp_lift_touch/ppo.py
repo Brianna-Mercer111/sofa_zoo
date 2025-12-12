@@ -214,5 +214,10 @@ if __name__ == "__main__":
     )
 
     log_path = str(model.logger.dir)
-    model.save(log_path + "saved_model.pth")
+    model.save(log_path + "/saved_model.zip")
+    
+    # Save VecNormalize statistics for resuming training later
+    model.get_env().save(log_path + "/vecnormalize.pkl")
+    print(f"✓ Model and VecNormalize saved to {log_path}")
+    
     wandb.finish()
