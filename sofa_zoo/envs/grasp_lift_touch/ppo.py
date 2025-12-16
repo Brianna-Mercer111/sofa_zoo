@@ -1,33 +1,53 @@
 import numpy as np
-from torch import nn
+import os
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 
-from sofa_env.scenes.grasp_lift_touch.grasp_lift_touch_env import CollisionEffect, GraspLiftTouchEnv, Phase, RenderMode, ObservationType, ActionType
-
+from sofa_env.scenes.grasp_lift_touch.grasp_lift_touch_env import (
+    CollisionEffect, GraspLiftTouchEnv, Phase, RenderMode, ObservationType, ActionType
+)
 from sofa_zoo.common.sb3_setup import configure_learning_pipeline
-from stable_baselines3.common.callbacks import CallbackList
 from sofa_zoo.common.lapgym_experiment_parameters import CONFIG, PPO_KWARGS
 import wandb
 from wandb.integration.sb3 import WandbCallback
 from enum import Enum
 
 
+class SaveCheckpointCallback(BaseCallback):
+    """Saves model and VecNormalize stats together at regular intervals."""
+    
+    def __init__(self, save_path: str, save_freq: int, verbose: int = 0):
+        super().__init__(verbose)
+        self.save_path = save_path
+        self.save_freq = save_freq
+        
+    def _on_step(self) -> bool:
+        if self.n_calls % self.save_freq == 0:
+            # Save model with timestep
+            model_path = os.path.join(self.save_path, f"model_{self.num_timesteps}.zip")
+            self.model.save(model_path)
+            
+            # Save VecNormalize - use model.get_env() which has the full wrapper stack
+            # The VecNormalize is inside the wrapper stack and will be saved correctly
+            vecnorm_path = os.path.join(self.save_path, f"vecnormalize_{self.num_timesteps}.pkl")
+            self.model.get_env().save(vecnorm_path)
+            
+            if self.verbose > 0:
+                print(f"✓ Checkpoint saved at step {self.num_timesteps}")
+                print(f"  Model: {model_path}")
+                print(f"  VecNormalize: {vecnorm_path}")
+        return True
+
+
 if __name__ == "__main__":
 
-    add_render_callback = True
     continuous_actions = True
     normalize_reward = True
     reward_clip = np.inf
 
-    # observation_type, [start phase, end phase]
     parameters = ["STATE", ["GRASP", "DONE"]]
-
-    if isinstance(parameters[1], str):
-        start_name = eval(parameters[1])[0]
-        end_name = eval(parameters[1])[1]
-    else:
-        start_name = parameters[1][0]
-        end_name = parameters[1][1]
+    start_name = parameters[1][0]
+    end_name = parameters[1][1]
     start_phase = Phase[start_name]
     end_phase = Phase[end_name]
 
@@ -36,7 +56,6 @@ if __name__ == "__main__":
 
     env_kwargs = {
         "image_shape": (64, 64),
-        "window_size": (600, 600),
         "observation_type": observation_type,
         "time_step": 0.05,
         "frame_skip": 2,
@@ -90,70 +109,35 @@ if __name__ == "__main__":
         "collision_punish_mode": CollisionEffect.CONSTANT,
         "losing_grasp_ends_episode": False,
     }
+    
     config = {"max_episode_steps": 400 + 100 * (end_phase.value - start_phase.value), **CONFIG}
-
-    if image_based:
-        ppo_kwargs = PPO_KWARGS["image_based"]
-    else:
-        ppo_kwargs = PPO_KWARGS["state_based"]
+    ppo_kwargs = PPO_KWARGS["state_based"]
 
     info_keywords = [
-        "ret_col_cau_gri",
-        "ret_col_cau_gal",
-        "ret_col_cau_liv",
-        "ret_col_gri_liv",
-        "ret_cau_act_vio_sta_lim",
-        "ret_cau_act_vio_car_wor",
-        "ret_gri_act_vio_sta_lim",
-        "ret_gri_act_vio_car_wor",
-        "ret_dis_cau_tar",
-        "ret_del_dis_cau_tar",
-        "ret_cau_tou_tar",
-        "ret_cau_act_in_tar",
-        "ret_tar_vis",
-        "ret_dis_gri_gra_reg",
-        "ret_del_dis_gri_gra_reg",
-        "ret_gal_is_gra",
-        "ret_new_gra_on_gal",
-        "ret_los_gra_on_gal",
-        "ret_act_gra_spr",
-        "ret_del_act_gra_spr",
-        "ret_gri_dis_to_tro",
-        "ret_gri_pul_gal_out",
-        "ret_ove_gal_liv",
-        "ret_del_ove_gal_liv",
-        "ret_dyn_for_on_gal",
-        "ret_suc_tas",
-        "ret_fai_tas",
-        "ret_pha_cha",
-        "ret",
-        "distance_cauter_target",
-        "cauter_touches_target",
-        "cauter_activation_in_target",
-        "target_visible",
-        "distance_gripper_graspable_region",
-        "gripper_distance_to_trocar",
-        "gripper_pulls_gallbladder_out",
-        "successful_task",
-        "final_phase",
+        "ret_col_cau_gri", "ret_col_cau_gal", "ret_col_cau_liv", "ret_col_gri_liv",
+        "ret_cau_act_vio_sta_lim", "ret_cau_act_vio_car_wor",
+        "ret_gri_act_vio_sta_lim", "ret_gri_act_vio_car_wor",
+        "ret_dis_cau_tar", "ret_del_dis_cau_tar", "ret_cau_tou_tar",
+        "ret_cau_act_in_tar", "ret_tar_vis", "ret_dis_gri_gra_reg",
+        "ret_del_dis_gri_gra_reg", "ret_gal_is_gra", "ret_new_gra_on_gal",
+        "ret_los_gra_on_gal", "ret_act_gra_spr", "ret_del_act_gra_spr",
+        "ret_gri_dis_to_tro", "ret_gri_pul_gal_out", "ret_ove_gal_liv",
+        "ret_del_ove_gal_liv", "ret_dyn_for_on_gal", "ret_suc_tas",
+        "ret_fai_tas", "ret_pha_cha", "ret",
+        "distance_cauter_target", "cauter_touches_target",
+        "cauter_activation_in_target", "target_visible",
+        "distance_gripper_graspable_region", "gripper_distance_to_trocar",
+        "gripper_pulls_gallbladder_out", "successful_task", "final_phase",
     ]
 
-    config["ppo_config"] = ppo_kwargs
-    config["env_kwargs"] = env_kwargs
-    config["info_keywords"] = info_keywords
-
     def make_wandb_safe(config_dict):
-        """Convert config dict to wandb-safe format, handling enum keys and values."""
         safe_dict = {}
         for key, value in config_dict.items():
-            # Convert key if it's an enum
             safe_key = key.name if isinstance(key, Enum) else key
-            
-            # Convert value based on type
             if isinstance(value, Enum):
                 safe_dict[safe_key] = value.name
             elif isinstance(value, dict):
-                safe_dict[safe_key] = make_wandb_safe(value)  # Recursive
+                safe_dict[safe_key] = make_wandb_safe(value)
             elif isinstance(value, (list, tuple)):
                 safe_dict[safe_key] = [
                     v.name if isinstance(v, Enum) else 
@@ -164,11 +148,10 @@ if __name__ == "__main__":
                 safe_dict[safe_key] = value
             else:
                 safe_dict[safe_key] = str(value)
-        
         return safe_dict
 
     wandb.init(
-        project="grasp-lift-touch",
+        project="grasp-lift-touch-PPO-expert",
         config={
             "observation_type": observation_type.name,
             "continuous_actions": continuous_actions,
@@ -184,12 +167,16 @@ if __name__ == "__main__":
         name=f"PPO_{observation_type.name}_cont={continuous_actions}",
     )
 
+    # Create save directory with run ID
+    save_path = f"models/{wandb.run.id}"
+    os.makedirs(save_path, exist_ok=True)
+
     model, callback = configure_learning_pipeline(
         env_class=GraspLiftTouchEnv,
         env_kwargs=env_kwargs,
         pipeline_config=config,
         monitoring_keywords=info_keywords,
-        normalize_observations=False if image_based else True,
+        normalize_observations=True,
         algo_class=PPO,
         algo_kwargs=ppo_kwargs,
         render=False,
@@ -197,15 +184,14 @@ if __name__ == "__main__":
         reward_clip=reward_clip,
     )
 
-    #        render=add_render_callback
-
-    wandb_callback = WandbCallback(
-        model_save_path=f"models/{wandb.run.id}",
-        model_save_freq=10000,
-        verbose=2,
+    # Save checkpoint every 80000 steps (model + vecnormalize together)
+    checkpoint_callback = SaveCheckpointCallback(
+        save_path=save_path,
+        save_freq=5000,
+        verbose=1,
     )
 
-    combined_callback = CallbackList([callback, wandb_callback])
+    combined_callback = CallbackList([callback, checkpoint_callback])
 
     model.learn(
         total_timesteps=config["total_timesteps"],
@@ -213,11 +199,9 @@ if __name__ == "__main__":
         tb_log_name=f"PPO_{observation_type.name}_{continuous_actions=}_start={start_phase.name}_end={end_phase.name}",
     )
 
-    log_path = str(model.logger.dir)
-    model.save(log_path + "/saved_model.zip")
-    
-    # Save VecNormalize statistics for resuming training later
-    model.get_env().save(log_path + "/vecnormalize.pkl")
-    print(f"✓ Model and VecNormalize saved to {log_path}")
+    # Save final checkpoint
+    model.save(f"{save_path}/final_model.zip")
+    model.get_env().save(f"{save_path}/final_vecnormalize.pkl")
+    print(f"✓ Training complete! Final checkpoint saved to {save_path}")
     
     wandb.finish()
